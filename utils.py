@@ -10,10 +10,11 @@ from typing import Optional, Sequence, Union
 
 import openai
 import tqdm
-from openai import openai_object
+# from openai import openai_object
 import copy
+import torch
 
-StrOrOpenAIObject = Union[str, openai_object.OpenAIObject]
+# StrOrOpenAIObject = Union[str, openai_object.OpenAIObject]
 
 openai_org = os.getenv("OPENAI_ORG")
 if openai_org is not None:
@@ -46,7 +47,7 @@ def openai_completion(
     max_batches=sys.maxsize,
     return_text=False,
     **decoding_kwargs,
-) -> Union[Union[StrOrOpenAIObject], Sequence[StrOrOpenAIObject], Sequence[Sequence[StrOrOpenAIObject]],]:
+): # -> Union[Union[StrOrOpenAIObject], Sequence[StrOrOpenAIObject], Sequence[Sequence[StrOrOpenAIObject]],]:
     """Decode with OpenAI API.
 
     Args:
@@ -128,6 +129,31 @@ def openai_completion(
         # Return non-tuple if only 1 input and 1 generation.
         (completions,) = completions
     return completions
+
+
+def hf_transformers_completion(
+        prompt,
+        model,
+        tokenizer,
+        temperature=0.7,
+        do_sample=True,
+        top_p=0.9,
+        top_k=50,
+        max_new_tokens=4096,
+        ):
+    with torch.no_grad():
+        token_ids = tokenizer.encode(prompt, return_tensors="pt")
+        output_ids = model.generate(
+            token_ids.to(model.device), 
+            temperature=temperature, 
+            do_sample=True,
+            top_p=top_p,
+            top_k=top_k,
+            max_new_tokens=max_new_tokens, 
+            pad_token_id=tokenizer.eos_token_id
+        )
+    result = tokenizer.decode(output_ids[0][token_ids.size(1) :], skip_special_tokens=True)
+    return result
 
 
 def _make_w_io_base(f, mode: str):
