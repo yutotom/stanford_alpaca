@@ -427,7 +427,7 @@ def generate_instruction_following_data_ja(
         process_duration = time.time() - process_start
         print(f"Request {request_idx} took {request_duration:.2f}s, processing took {process_duration:.2f}s")
         print(f"Generated {total} instructions, kept {keep} instructions")
-        utils.jdump(machine_instruction_data, os.path.join(output_dir, "regen_ja.json"))
+        utils.jdump_ja(machine_instruction_data, os.path.join(output_dir, "regen_ja.json"))
 
 
 def main(task, **kwargs):
