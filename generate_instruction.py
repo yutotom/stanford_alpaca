@@ -340,7 +340,6 @@ def generate_instruction_following_data_ja(
     top_p=0.95,
     top_k=40,
     max_new_tokens=4096,
-    num_cpus=4,
 ):
     seed_tasks = [json.loads(l) for l in open(seed_tasks_path, "r")]
     seed_instruction_data = [
@@ -407,11 +406,10 @@ def generate_instruction_following_data_ja(
         for instruction_data_entry in instruction_data:
             # トークナイズされた指示との類似度を計算
             new_instruction_tokens = scorer._tokenizer.tokenize(instruction_data_entry["instruction"])
-            with Pool(num_cpus) as p:
-                rouge_scores = p.map(
-                    partial(rouge_scorer._score_lcs, new_instruction_tokens),
-                    all_instruction_tokens,
-                )
+            rouge_scores = []
+            for tokens in all_instruction_tokens:
+                score = rouge_scorer._score_lcs(new_instruction_tokens, tokens)
+                rouge_scores.append(score)
             rouge_scores = [score.fmeasure for score in rouge_scores]
             most_similar_instructions = {
                 all_instructions[i]: rouge_scores[i] for i in np.argsort(rouge_scores)[-10:][::-1]
