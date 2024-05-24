@@ -6,31 +6,34 @@ python -m generate_instruction generate_instruction_following_data \
   --output_dir ./ \
   --num_instructions_to_generate 10 \
   --model_name="text-davinci-003" \
-  
+
 python -m generate_instruction generate_instruction_following_data_ja \
     --output_dir ./ \
     --num_instructions_to_generate 10 \
     --model_name="mistralai/Mistral-7B-v0.1" \
 """
-import time
+
 import json
 import os
 import random
 import re
 import string
+import time
 from functools import partial
 from multiprocessing import Pool
 
+import fire
+import MeCab
 import numpy as np
+import torch
 import tqdm
 from rouge_score import rouge_scorer
 from rouge_score.tokenizers import Tokenizer
-import utils
+from sentence_transformers import SentenceTransformer
+from sentence_transformers import util as sentence_util
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import fire
-import MeCab
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
+import utils
 
 
 class MeCabTokenizer(Tokenizer):
@@ -39,12 +42,12 @@ class MeCabTokenizer(Tokenizer):
     Args:
         use_stemmer (bool, optional): Trueの場合、単語の原型で分割する. Defaults to False.
     """
+
     def __init__(self, use_stemmer=False):
         self._stemmer = use_stemmer
-        
+
         self.tagger = MeCab.Tagger()
         self.wakati = MeCab.Tagger("-Owakati")
-
 
     def tokenize(self, text):
         if self._stemmer:
@@ -56,7 +59,7 @@ class MeCabTokenizer(Tokenizer):
                 node = node.next
 
             return original_forms
-        
+
         else:
             return self.wakati.parse(text).split()
 
@@ -335,7 +338,7 @@ def generate_instruction_following_data_ja(
     seed_tasks_path="./seed_tasks_ja.jsonl",
     num_instructions_to_generate=100,
     model_name="mistralai/Mixtral-8x22B-v0.1",
-    num_prompt_instructions=3,
+    num_prompt_instructions=10,
     temperature=0.7,
     top_p=0.95,
     top_k=40,
@@ -367,16 +370,18 @@ def generate_instruction_following_data_ja(
     all_instructions = [d["instruction"] for d in seed_instruction_data] + [
         d["instruction"] for d in machine_instruction_data
     ]
-    all_instruction_tokens = [scorer._tokenizer.tokenize(inst) for inst in all_instructions]
+    # all_instruction_tokens = [scorer._tokenizer.tokenize(inst) for inst in all_instructions]
+    sentence_model = SentenceTransformer("cl-nagoya/sup-simcse-ja-large")
+    all_instruction_embeddings = sentence_model.encode(all_instructions, convert_to_tensor=True)
 
     # モデルとトークナイザを読み込む
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=False,
-    )
+    # tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     model_name,
+    #     torch_dtype=torch.bfloat16,
+    #     device_map="auto",
+    #     trust_remote_code=False,
+    # )
 
     while len(machine_instruction_data) < num_instructions_to_generate:
         request_idx += 1
@@ -386,16 +391,17 @@ def generate_instruction_following_data_ja(
         prompt = encode_prompt_ja(prompt_instructions)
 
         request_start = time.time()
-        result = utils.hf_transformers_completion(
-            prompt,
-            model,
-            tokenizer,
-            temperature=temperature,
-            do_sample=True,
-            top_p=top_p,
-            top_k=top_k,
-            max_new_tokens=max_new_tokens,
-        )
+        # result = utils.hf_transformers_completion(
+        #     prompt,
+        #     model,
+        #     tokenizer,
+        #     temperature=temperature,
+        #     do_sample=True,
+        #     top_p=top_p,
+        #     top_k=top_k,
+        #     max_new_tokens=max_new_tokens,
+        # )
+        result = utils.mistral_completion(prompt)
         request_duration = time.time() - request_start
 
         process_start = time.time()
@@ -405,24 +411,48 @@ def generate_instruction_following_data_ja(
         keep = 0
         for instruction_data_entry in instruction_data:
             # トークナイズされた指示との類似度を計算
-            new_instruction_tokens = scorer._tokenizer.tokenize(instruction_data_entry["instruction"])
-            rouge_scores = []
-            for tokens in all_instruction_tokens:
-                score = rouge_scorer._score_lcs(new_instruction_tokens, tokens)
-                rouge_scores.append(score)
-            rouge_scores = [score.fmeasure for score in rouge_scores]
+            # new_instruction_tokens = scorer._tokenizer.tokenize(instruction_data_entry["instruction"])
+            # rouge_scores = []
+            # for tokens in all_instruction_tokens:
+            #     score = rouge_scorer._score_lcs(new_instruction_tokens, tokens)
+            #     rouge_scores.append(score)
+            # rouge_scores = [score.fmeasure for score in rouge_scores]
+            # most_similar_instructions = {
+            #     all_instructions[i]: rouge_scores[i] for i in np.argsort(rouge_scores)[-10:][::-1]
+            # }
+            new_instruction_embeddings = sentence_model.encode(
+                instruction_data_entry["instruction"], convert_to_tensor=True
+            )
+            # with Pool(num_cpus) as p:
+            #     rouge_scores = p.map(
+            #         partial(rouge_scorer._score_lcs, new_instruction_tokens),
+            #         all_instruction_tokens,
+            #     )
+            cosine_scores = (
+                sentence_util.cos_sim(new_instruction_embeddings, all_instruction_embeddings).cpu().numpy().flatten()
+            )
+            # rouge_scores = [score.fmeasure for score in rouge_scores]
+            # most_similar_instructions = {
+            #     all_instructions[i]: rouge_scores[i] for i in np.argsort(rouge_scores)[-10:][::-1]
+            # }
             most_similar_instructions = {
-                all_instructions[i]: rouge_scores[i] for i in np.argsort(rouge_scores)[-10:][::-1]
+                all_instructions[i]: cosine_scores[i] for i in np.argsort(cosine_scores)[-10:][::-1]
             }
-            if max(rouge_scores) > 0.7:
+            # if max(rouge_scores) > 0.7:
+            #     continue
+            if max(cosine_scores) > 0.7:
                 continue
             else:
                 keep += 1
             instruction_data_entry["most_similar_instructions"] = most_similar_instructions
-            instruction_data_entry["avg_similarity_score"] = float(np.mean(rouge_scores))
+            # instruction_data_entry["avg_similarity_score"] = float(np.mean(rouge_scores))
+            instruction_data_entry["avg_similarity_score"] = float(np.mean(cosine_scores))
             machine_instruction_data.append(instruction_data_entry)
             all_instructions.append(instruction_data_entry["instruction"])
-            all_instruction_tokens.append(new_instruction_tokens)
+            # all_instruction_tokens.append(new_instruction_tokens)
+            all_instruction_embeddings = torch.cat(
+                [all_instruction_embeddings, new_instruction_embeddings.unsqueeze(0)], dim=0
+            )
             progress_bar.update(1)
         process_duration = time.time() - process_start
         print(f"Request {request_idx} took {request_duration:.2f}s, processing took {process_duration:.2f}s")

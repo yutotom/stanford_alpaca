@@ -1,18 +1,23 @@
+# from openai import openai_object
+import copy
 import dataclasses
+import io
+import json
 import logging
 import math
 import os
-import io
 import sys
 import time
-import json
 from typing import Optional, Sequence, Union
 
 import openai
-import tqdm
-# from openai import openai_object
-import copy
 import torch
+import tqdm
+from mistralai.client import MistralClient
+from mistralai.models.chat_completion import ChatMessage
+
+mistral_api_key = os.environ["MISTRAL_API_KEY"]
+model = "open-mixtral-8x22b"
 
 # StrOrOpenAIObject = Union[str, openai_object.OpenAIObject]
 
@@ -38,7 +43,7 @@ class OpenAIDecodingArguments(object):
 
 
 def openai_completion(
-    prompts: Union[str, Sequence[str], Sequence[dict[str, str]], dict[str, str]],
+    prompts,
     decoding_args: OpenAIDecodingArguments,
     model_name="text-davinci-003",
     sleep_time=2,
@@ -47,7 +52,7 @@ def openai_completion(
     max_batches=sys.maxsize,
     return_text=False,
     **decoding_kwargs,
-): # -> Union[Union[StrOrOpenAIObject], Sequence[StrOrOpenAIObject], Sequence[Sequence[StrOrOpenAIObject]],]:
+):  # -> Union[Union[StrOrOpenAIObject], Sequence[StrOrOpenAIObject], Sequence[Sequence[StrOrOpenAIObject]],]:
     """Decode with OpenAI API.
 
     Args:
@@ -132,28 +137,41 @@ def openai_completion(
 
 
 def hf_transformers_completion(
-        prompt,
-        model,
-        tokenizer,
-        temperature=0.7,
-        do_sample=True,
-        top_p=0.9,
-        top_k=50,
-        max_new_tokens=4096,
-        ):
+    prompt,
+    model,
+    tokenizer,
+    temperature=0.7,
+    do_sample=True,
+    top_p=0.9,
+    top_k=50,
+    max_new_tokens=4096,
+):
     with torch.no_grad():
         token_ids = tokenizer.encode(prompt, return_tensors="pt")
         output_ids = model.generate(
-            token_ids.to(model.device), 
-            temperature=temperature, 
+            token_ids.to(model.device),
+            temperature=temperature,
             do_sample=True,
             top_p=top_p,
             top_k=top_k,
-            max_new_tokens=max_new_tokens, 
-            pad_token_id=tokenizer.eos_token_id
+            max_new_tokens=max_new_tokens,
+            pad_token_id=tokenizer.eos_token_id,
         )
     result = tokenizer.decode(output_ids[0][token_ids.size(1) :], skip_special_tokens=True)
     return result
+
+
+def mistral_completion(prompt):
+    client = MistralClient(api_key=mistral_api_key)
+    messages = [ChatMessage(role="user", content=prompt)]
+
+    # No streaming
+    chat_response = client.chat(
+        model=model,
+        messages=messages,
+    )
+
+    return chat_response.choices[0].message.content
 
 
 def _make_w_io_base(f, mode: str):
@@ -190,6 +208,7 @@ def jdump(obj, f, mode="w", indent=4, default=str):
         raise ValueError(f"Unexpected type: {type(obj)}")
     f.close()
 
+
 def jdump_ja(obj, f, mode="w", indent=4, default=str):
     """Dump a str or dictionary to a file in json format.
 
@@ -208,7 +227,6 @@ def jdump_ja(obj, f, mode="w", indent=4, default=str):
     else:
         raise ValueError(f"Unexpected type: {type(obj)}")
     f.close()
-
 
 
 def jload(f, mode="r"):
